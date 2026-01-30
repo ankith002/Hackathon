@@ -3,6 +3,8 @@ import './ContentApproval.css';
 import { getPendingContent, approveContent, editContent, deleteContent, regenerateContent, getClients } from '../services/api';
 import BackButton from '../components/BackButton';
 import WorkflowProgress from '../components/WorkflowProgress';
+import PlatformSelectionModal from '../components/PlatformSelectionModal';
+import CredentialModal from '../components/CredentialModal';
 import { useToastContext } from '../context/ToastContext';
 
 const ContentApproval = () => {
@@ -16,6 +18,11 @@ const ContentApproval = () => {
   const [workflowStep, setWorkflowStep] = useState('approval');
   const [completedSteps, setCompletedSteps] = useState(['onboarding', 'generating']);
   const [postingItemId, setPostingItemId] = useState(null);
+  const [showPlatformModal, setShowPlatformModal] = useState(false);
+  const [showCredentialModal, setShowCredentialModal] = useState(false);
+  const [pendingApproval, setPendingApproval] = useState(null);
+  const [selectedPlatform, setSelectedPlatform] = useState(null);
+  const [storedCredentials, setStoredCredentials] = useState({});
   const toast = useToastContext();
 
   useEffect(() => {
@@ -47,7 +54,38 @@ const ContentApproval = () => {
   };
 
   const handleApprove = async (itemId) => {
+    const item = contentItems.find(c => c.id === itemId);
+    if (!item) return;
+    
+    // Show platform selection modal first
+    setPendingApproval({ itemId, item });
+    setShowPlatformModal(true);
+  };
+
+  const handlePlatformSelect = (platform) => {
+    setSelectedPlatform(platform);
+    setShowPlatformModal(false);
+    
+    // Check if we have stored credentials for this platform
+    if (pendingApproval) {
+      const clientId = pendingApproval.item.client_id;
+      const credentialKey = `${clientId}_${platform.id}`;
+      
+      if (storedCredentials[credentialKey]) {
+        // Use stored credentials
+        performApproval(pendingApproval.itemId, pendingApproval.item, storedCredentials[credentialKey], platform.id);
+      } else {
+        // Show credential modal
+        setShowCredentialModal(true);
+      }
+    }
+  };
+
+  const performApproval = async (itemId, item, credentials = null, platform = null) => {
     try {
+      // Determine target platform once
+      const targetPlatform = platform || item.platform;
+      
       // Step 1: Show approval step
       setWorkflowStep('approval');
       setCompletedSteps(['onboarding', 'generating']);
@@ -57,20 +95,36 @@ const ContentApproval = () => {
       setPostingItemId(itemId);
       setCompletedSteps(['onboarding', 'generating', 'approval']);
       
-      toast.info('Approving content and posting to platforms...');
+      toast.info(`Approving content and posting to ${targetPlatform}...`);
       
-      // Step 3: Post to n8n
-      await approveContent(itemId);
+      // Step 3: Post to platform with credentials
+      const result = await approveContent(itemId, targetPlatform, credentials);
       
       // Step 4: Complete workflow
       setCompletedSteps(['onboarding', 'generating', 'approval', 'posting']);
       setPostingItemId(null);
       
+      // Store credentials if provided
+      if (credentials) {
+        const credentialKey = `${item.client_id}_${targetPlatform.toLowerCase()}`;
+        setStoredCredentials(prev => ({
+          ...prev,
+          [credentialKey]: credentials
+        }));
+      }
+      
       // Reload content
       await loadContent();
       
       // Show success message
-      toast.success('✅ Content approved and posted successfully to all platforms!');
+      const postingResult = result.posting_result;
+      if (postingResult && postingResult.success) {
+        toast.success(`✅ Content approved and posted to ${targetPlatform} successfully!`);
+      } else if (postingResult && !postingResult.success) {
+        toast.warning(`⚠️ Content approved but posting failed: ${postingResult.message}`);
+      } else {
+        toast.success('✅ Content approved successfully!');
+      }
       
       // Reset workflow after 2 seconds
       setTimeout(() => {
@@ -82,6 +136,15 @@ const ContentApproval = () => {
       setWorkflowStep('approval');
       setCompletedSteps(['onboarding', 'generating']);
       toast.error('Error approving content: ' + error.message);
+    }
+  };
+
+  const handleCredentialSave = async (credentials) => {
+    setShowCredentialModal(false);
+    if (pendingApproval && selectedPlatform) {
+      await performApproval(pendingApproval.itemId, pendingApproval.item, credentials, selectedPlatform.id);
+      setPendingApproval(null);
+      setSelectedPlatform(null);
     }
   };
 
@@ -192,6 +255,29 @@ const ContentApproval = () => {
           currentStep={workflowStep} 
           completedSteps={completedSteps}
         />
+        {showPlatformModal && pendingApproval && (
+          <PlatformSelectionModal
+            isOpen={showPlatformModal}
+            onClose={() => {
+              setShowPlatformModal(false);
+              setPendingApproval(null);
+            }}
+            onSelect={handlePlatformSelect}
+          />
+        )}
+        {showCredentialModal && pendingApproval && selectedPlatform && (
+          <CredentialModal
+            platform={selectedPlatform.name}
+            isOpen={showCredentialModal}
+            onClose={() => {
+              setShowCredentialModal(false);
+              setPendingApproval(null);
+              setSelectedPlatform(null);
+            }}
+            onSave={handleCredentialSave}
+            existingCredentials={storedCredentials[`${pendingApproval.item.client_id}_${selectedPlatform.id}`]}
+          />
+        )}
         <div className="page-header">
           <h1>Content Approval</h1>
           <p>Review and approve AI-generated content before publishing</p>

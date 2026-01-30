@@ -30,11 +30,25 @@ async def connect_to_mongo():
         raise
 
 async def close_mongo_connection():
-    """Close MongoDB connection"""
-    global client
-    if client is not None:
-        client.close()
-        print("MongoDB connection closed")
+    """Close MongoDB connection gracefully"""
+    global client, database
+    try:
+        if client is not None:
+            # Close connection gracefully
+            client.close()
+            print("MongoDB connection closed")
+            client = None
+            database = None
+    except KeyboardInterrupt:
+        # Handle interrupt during shutdown (common during reload)
+        print("MongoDB connection closed (interrupted)")
+        client = None
+        database = None
+    except Exception as e:
+        # Log but don't raise - allow shutdown to continue
+        print(f"⚠️ Warning during MongoDB shutdown: {str(e)}")
+        client = None
+        database = None
 
 def get_database():
     """Get database instance"""
@@ -54,3 +68,8 @@ def get_campaigns_collection():
     """Get campaigns collection"""
     db = get_database()
     return db.campaigns if db is not None else None
+
+def get_credentials_collection():
+    """Get platform credentials collection"""
+    db = get_database()
+    return db.credentials if db is not None else None

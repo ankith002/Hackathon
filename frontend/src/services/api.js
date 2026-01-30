@@ -116,18 +116,43 @@ export const getPendingContent = async (clientId = 'all') => {
 /**
  * Approve content
  */
-export const approveContent = async (contentId) => {
+export const approveContent = async (contentId, platform = null, credentials = null) => {
   try {
+    const requestBody = {};
+    if (platform) {
+      requestBody.platform = platform;
+    }
+    if (credentials) {
+      requestBody.credentials = credentials;
+    }
+    
+    console.log('Approving content:', { contentId, platform, hasCredentials: !!credentials });
+    
     const response = await fetch(`${API_BASE_URL}/api/content/${contentId}/approve`, {
-      method: 'POST'
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(requestBody)
     });
+    
     const data = await response.json();
+    
+    if (!response.ok) {
+      console.error('Approve content error:', data);
+      throw new Error(data.message || data.error || `HTTP ${response.status}: Failed to approve content`);
+    }
+    
     if (!data.success) {
+      console.error('Approve content failed:', data);
       throw new Error(data.message || 'Failed to approve content');
     }
+    
+    console.log('Content approved successfully:', data);
     return data;
   } catch (error) {
-    throw new Error('Failed to approve content');
+    console.error('Error in approveContent:', error);
+    throw error;
   }
 };
 

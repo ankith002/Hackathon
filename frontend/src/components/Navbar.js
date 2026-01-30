@@ -12,7 +12,7 @@ const Navbar = () => {
     <nav className="navbar">
       <div className="navbar-container">
         <Link to="/" className="navbar-logo">
-          <span className="logo-icon">🚀</span>
+          <span className="logo-icon"></span>
           <span className="logo-text">CampaignForge</span>
         </Link>
 

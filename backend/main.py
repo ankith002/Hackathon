@@ -12,7 +12,10 @@ from pathlib import Path
 from bson import ObjectId
 from contextlib import asynccontextmanager
 from services import generate_content_for_all_platforms, generate_content, regenerate_content, post_to_n8n
-from database import connect_to_mongo, close_mongo_connection, get_database, get_clients_collection, get_content_collection, get_campaigns_collection
+from database import connect_to_mongo, close_mongo_connection, get_database, get_clients_collection, get_content_collection, get_campaigns_collection, get_credentials_collection
+from platform_posting import post_to_platform
+from puppeteer_posting import post_to_platform_puppeteer
+import asyncio
 
 def convert_objectid_to_str(obj):
     """Recursively convert ObjectId to string in dictionaries"""
@@ -27,10 +30,20 @@ def convert_objectid_to_str(obj):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    await connect_to_mongo()
+    try:
+        await connect_to_mongo()
+    except Exception as e:
+        print(f"⚠️ Warning: MongoDB connection issue during startup: {str(e)}")
+        print("Continuing without MongoDB (will use in-memory storage)")
+    
     yield
+    
     # Shutdown
-    await close_mongo_connection()
+    try:
+        await close_mongo_connection()
+    except Exception as e:
+        print(f"⚠️ Warning: Error during MongoDB shutdown: {str(e)}")
+        # Continue shutdown even if MongoDB close fails
 
 app = FastAPI(title="CampaignForge API", version="1.0.0", lifespan=lifespan)
 
@@ -63,6 +76,10 @@ class ClientOnboardingRequest(BaseModel):
     content_preferences: Optional[str] = None
     budget_range: Optional[str] = None
     primary_channels: Optional[str] = None
+
+class ApproveContentRequest(BaseModel):
+    platform: Optional[str] = None
+    credentials: Optional[dict] = None
 
 # MongoDB collections will be accessed via helper functions from database.py
 
@@ -288,29 +305,26 @@ async def get_pending_content(client_id: Optional[str] = Query(None)):
     }
 
 @app.post("/api/content/{content_id}/approve")
-async def approve_content_endpoint(content_id: str):
-    """Approve content and post to n8n"""
-    content_collection = get_content_collection()
-    clients_collection = get_clients_collection()
-    
-    if content_collection is not None:
-        content = await content_collection.find_one({"id": content_id})
-        if content is None:
-            return JSONResponse(
-                status_code=404,
-                content={"success": False, "message": "Content not found"}
-            )
+async def approve_content_endpoint(content_id: str, request: ApproveContentRequest = ApproveContentRequest()):
+    """Approve content and post to platform with credentials"""
+    try:
+        content_collection = get_content_collection()
+        clients_collection = get_clients_collection()
+        credentials_collection = get_credentials_collection()
         
-        # Update status
-        await content_collection.update_one(
-            {"id": content_id},
-            {"$set": {
-                "status": "approved",
-                "approved_at": datetime.now().isoformat()
-            }}
-        )
-        content['status'] = 'approved'
-        content['approved_at'] = datetime.now().isoformat()
+        # Get credentials and platform from request
+        credentials = request.credentials if request.credentials else {}
+        platform = (request.platform or '').lower()
+        
+        if content_collection is not None:
+            content = await content_collection.find_one({"id": content_id})
+            if content is None:
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "message": f"Content not found with id: {content_id}"}
+                )
+        
+        platform = platform or content.get('platform', '').lower()
         
         # Get client data
         if clients_collection is not None:
@@ -319,50 +333,99 @@ async def approve_content_endpoint(content_id: str):
             clients_db = getattr(app.state, 'clients_db', [])
             client = next((c for c in clients_db if c["client_id"] == content.get('client_id')), None)
         
-        # Post to n8n
-        if client is not None:
-            n8n_result = post_to_n8n(
-                platform=content.get('platform'),
-                content=content.get('content'),
-                client_data=client
+        # Post to platform if credentials provided
+        posting_result = None
+        if credentials and platform in ['linkedin', 'reddit', 'email']:
+            # Get image URL if available
+            image_url = content.get('generated_image_url')
+            if not image_url and content.get('uploaded_images'):
+                image_url = content.get('uploaded_images', [])[0]
+            if image_url and not image_url.startswith('http'):
+                image_url = f"http://localhost:8000{image_url}"
+            
+            # Post to platform using Puppeteer (or SMTP for email)
+            # Always await since post_to_platform_puppeteer is async
+            posting_result = await post_to_platform_puppeteer(
+                platform=platform,
+                content=content.get('content', ''),
+                credentials=credentials,
+                image_url=image_url
             )
+            
+            # Store credentials for future use (optional - can be removed for security)
+            if credentials_collection is not None and posting_result.get('success'):
+                await credentials_collection.update_one(
+                    {
+                        "client_id": content.get('client_id'),
+                        "platform": platform
+                    },
+                    {
+                        "$set": {
+                            "credentials": credentials,
+                            "updated_at": datetime.now().isoformat()
+                        }
+                    },
+                    upsert=True
+                )
+        elif platform and platform not in ['linkedin', 'reddit', 'email']:
+            # For other platforms, use n8n as fallback
+            if client is not None:
+                posting_result = post_to_n8n(
+                    platform=content.get('platform'),
+                    content=content.get('content'),
+                    client_data=client
+                )
+        
+        # Update status
+        update_data = {
+            "status": "approved",
+            "approved_at": datetime.now().isoformat()
+        }
+        
+        if posting_result:
+            update_data["posting_result"] = posting_result
+        
             await content_collection.update_one(
                 {"id": content_id},
-                {"$set": {"n8n_result": n8n_result}}
+                {"$set": update_data}
             )
-            content['n8n_result'] = n8n_result
+            content.update(update_data)
+            
+            if '_id' in content:
+                content['_id'] = str(content['_id'])
+        else:
+            # Fallback to in-memory
+            content_db = getattr(app.state, 'content_db', [])
+            clients_db = getattr(app.state, 'clients_db', [])
+            content = next((c for c in content_db if c.get('id') == content_id), None)
+            if content is None:
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "message": "Content not found"}
+                )
+            
+            content['status'] = 'approved'
+            content['approved_at'] = datetime.now().isoformat()
         
-        if '_id' in content:
-            content['_id'] = str(content['_id'])
-    else:
-        # Fallback to in-memory
-        content_db = getattr(app.state, 'content_db', [])
-        clients_db = getattr(app.state, 'clients_db', [])
-        content = next((c for c in content_db if c.get('id') == content_id), None)
-        if content is None:
-            return JSONResponse(
-                status_code=404,
-                content={"success": False, "message": "Content not found"}
-            )
-        
-        content['status'] = 'approved'
-        content['approved_at'] = datetime.now().isoformat()
-        
-        client = next((c for c in clients_db if c["client_id"] == content.get('client_id')), None)
-        
-        if client is not None:
-            n8n_result = post_to_n8n(
-                platform=content.get('platform'),
-                content=content.get('content'),
-                client_data=client
-            )
-            content['n8n_result'] = n8n_result
-    
-    return {
-        "success": True,
-        "message": "Content approved and posted",
-        "data": content
-    }
+        return {
+            "success": True,
+            "message": "Content approved and posted",
+            "data": content,
+            "posting_result": posting_result if 'posting_result' in locals() else None
+        }
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"Error in approve_content_endpoint: {str(e)}")
+        print(error_trace)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "message": f"Error approving content: {str(e)}",
+                "error": str(e)
+            }
+        )
 
 @app.put("/api/content/{content_id}/edit")
 async def edit_content_endpoint(content_id: str, request: dict):
@@ -724,4 +787,63 @@ async def delete_campaign_endpoint(campaign_id: str):
     }
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    import signal
+    import sys
+    import logging
+    
+    # Suppress KeyboardInterrupt errors during reload (Windows uvicorn issue)
+    import logging
+    logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    
+    # Suppress multiprocessing KeyboardInterrupt during reload
+    import multiprocessing
+    import multiprocessing.process
+    
+    # Patch to handle KeyboardInterrupt gracefully during reload
+    _original_bootstrap = multiprocessing.process.BaseProcess._bootstrap
+    
+    def _patched_bootstrap(self):
+        try:
+            return _original_bootstrap(self)
+        except (KeyboardInterrupt, SystemExit):
+            # Silently handle interrupts during reload - this is normal on Windows
+            pass
+        except Exception:
+            # Re-raise other exceptions
+            raise
+    
+    multiprocessing.process.BaseProcess._bootstrap = _patched_bootstrap
+    
+    def signal_handler(sig, frame):
+        """Handle shutdown signals gracefully"""
+        print("\n🛑 Shutting down server gracefully...")
+        sys.exit(0)
+    
+    # Register signal handlers for graceful shutdown (only on Unix-like systems)
+    if sys.platform != 'win32':
+        if hasattr(signal, 'SIGINT'):
+            signal.signal(signal.SIGINT, signal_handler)
+        if hasattr(signal, 'SIGTERM'):
+            signal.signal(signal.SIGTERM, signal_handler)
+    
+    # Run with reload enabled, but handle Windows-specific issues
+    try:
+        uvicorn.run(
+            app, 
+            host="0.0.0.0", 
+            port=8000,
+            reload=True,
+            reload_delay=1.5,  # Add delay to prevent rapid reloads
+            log_level="info",
+            reload_excludes=["*.pyc", "__pycache__", "*.log"]  # Exclude cache files
+        )
+    except KeyboardInterrupt:
+        # Handle keyboard interrupt gracefully
+        print("\n🛑 Server shutdown requested")
+        sys.exit(0)
+    except Exception as e:
+        print(f"❌ Server error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)

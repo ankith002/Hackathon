@@ -1,0 +1,31 @@
+0:00:11 Tab2 PageLoad
+0:00:11 Tab2 StartNav24 #renderer-script #auto_subframe
+0:00:11 Tab2 StartNav25 #renderer-script #auto_subframe
+0:00:11 Tab2 FinishNav25
+0:00:11 Tab2 PageLoad
+0:00:12 Tab2 StartNav26 #renderer-script #auto_subframe
+0:00:12 Tab2 FinishNav26
+0:00:12 Tab2 PageLoad
+0:00:12 Tab2 StartNav27 #renderer-script #auto_subframe
+0:00:12 Tab2 FinishNav27
+0:00:12 Tab2 PageLoad
+0:00:12 Tab2 StartNav28 #renderer-script #auto_subframe
+0:00:12 Tab2 FinishNav28
+0:00:12 Tab2 PageLoad
+0:00:12 Tab2 StartNav29 #renderer-script #auto_subframe
+0:00:12 Tab2 FinishNav29
+0:00:12 Tab2 PageLoad
+0:00:12 Tab2 StartNav30 #renderer-script #auto_subframe
+0:00:12 Tab2 FinishNav30
+0:00:12 Tab2 PageLoad
+0:00:12 Tab2 StartNav31 #renderer-script #auto_subframe
+0:00:12 Tab2 FinishNav24
+0:00:12 Tab2 FinishNav31
+0:00:12 Tab2 StartNav32 #renderer-script #auto_subframe
+0:00:12 Tab2 FinishNav32
+0:00:12 Tab2 StartNav33 #renderer-script #link
+0:00:12 Tab2 PageLoad
+0:00:12 Tab2 FinishNav33
+0:00:12 Tab2 PageLoad
+0:00:13 Tab2 PageLoad
+0:01:11 Microsoft.Shutdown.ExitIgnoreUnloadHandlers
