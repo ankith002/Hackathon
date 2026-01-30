@@ -1,0 +1,23 @@
+{
+  "name": "putp-social-automation",
+  "version": "1.0.0",
+  "description": "Social media and email automation",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "login:reddit": "node scripts/login-reddit.js",
+    "debug:reddit": "node scripts/debug-reddit.js",
+    "debug:submit": "node scripts/debug-submit.js",
+    "save-cookies": "node scripts/save-cookies.js",
+    "email:send": "node scripts/send-email-bulk.js"
+  },
+  "keywords": ["automation", "email", "puppeteer"],
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "nodemailer": "^6.10.1",
+    "puppeteer": "^24.0.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  }
+}
